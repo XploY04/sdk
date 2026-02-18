@@ -114,8 +114,9 @@ class KubernetesBackend(RuntimeBackend):
                 return model_class.from_dict(thread.get(common_constants.DEFAULT_TIMEOUT))
             except multiprocessing.TimeoutError as e:
                 raise TimeoutError(f"Timeout to list {kind}s") from e
-            except Exception as e:
-                raise RuntimeError(f"Failed to list {kind}s") from e
+            except Exception:
+                logger.warning(f"Failed to list {kind}s, skipping")
+                return None
 
         cluster_runtimes = fetch_runtime_list(
             cluster_thread,
@@ -186,11 +187,8 @@ class KubernetesBackend(RuntimeBackend):
             raise TimeoutError(
                 f"Timeout to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
             ) from e
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
-            ) from e
-
+        except Exception:
+            pass
         try:
             cluster_thread = self.custom_api.get_cluster_custom_object(
                 constants.GROUP,
@@ -203,14 +201,13 @@ class KubernetesBackend(RuntimeBackend):
                 cluster_thread.get(common_constants.DEFAULT_TIMEOUT)
             )
             return self.__get_runtime_from_cr(runtime)
-
         except multiprocessing.TimeoutError as e:
             raise TimeoutError(
-                f"Timeout to get {constants.CLUSTER_TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
+                f"Timeout to get {constants.CLUSTER_TRAINING_RUNTIME_KIND}: {name}"
             ) from e
         except Exception as e:
             raise RuntimeError(
-                f"Failed to get {constants.CLUSTER_TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
+                f"Failed to get Runtime: {name} (checked both namespaced and cluster scope)"
             ) from e
 
     def get_runtime_packages(self, runtime: types.Runtime):
