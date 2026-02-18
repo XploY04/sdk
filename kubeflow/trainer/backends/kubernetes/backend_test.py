@@ -27,6 +27,7 @@ import string
 from unittest.mock import Mock, patch
 import uuid
 
+from kubernetes import client
 from kubeflow_trainer_api import models
 import pytest
 
@@ -49,6 +50,9 @@ from kubeflow.trainer.test.common import (
     TestCase,
 )
 from kubeflow.trainer.types import types
+
+NOT_FOUND = "not_found"
+FORBIDDEN = "forbidden"
 
 # In all tests runtime name is equal to the framework name.
 TORCH_RUNTIME = "torch"
@@ -350,6 +354,10 @@ def get_namespaced_custom_object_response(*args, **kwargs):
         raise multiprocessing.TimeoutError()
     if args[2] == RUNTIME or args[4] == RUNTIME:
         raise RuntimeError()
+    if args[4] == NOT_FOUND:
+        raise client.ApiException(status=404)
+    if args[4] == FORBIDDEN:
+        raise client.ApiException(status=403)
     if args[3] == TRAIN_JOBS:  # TODO: review this.
         mock_thread.get.return_value = add_status(create_train_job(train_job_name=args[4]))
     elif args[3] == constants.TRAINING_RUNTIME_PLURAL:
@@ -846,6 +854,20 @@ def test_verify_backend(test_case):
             config={"name": RUNTIME},
             expected_error=RuntimeError,
         ),
+        TestCase(
+            name="404 error (not found) when getting namespaced runtime -> fallback to cluster",
+            expected_status=SUCCESS,
+            config={"name": NOT_FOUND},
+            expected_output=create_runtime_type(
+                name=NOT_FOUND,
+            ),
+        ),
+        TestCase(
+            name="403 error (forbidden) when getting namespaced runtime -> raise RuntimeError",
+            expected_status=FAILED,
+            config={"name": FORBIDDEN},
+            expected_error=RuntimeError,
+        ),
     ],
 )
 def test_get_runtime(kubernetes_backend, test_case):
@@ -880,23 +902,30 @@ def test_get_runtime(kubernetes_backend, test_case):
                 create_runtime_type(name="runtime-3"),
             ],
         ),
-        # namespace retrieval fails (timeout) but cluster succeeds -> expect TimeoutError
+        # namespace retrieval fails (timeout) but cluster succeeds -> expect SUCCESS (partial results)
         TestCase(
             name="namespace fails but cluster succeeds",
-            expected_status=FAILED,
+            expected_status=SUCCESS,
             config={"namespace": TIMEOUT, "name": LIST_RUNTIMES},
-            expected_error=TimeoutError,
+            expected_output=[
+                create_runtime_type(name="runtime-1"),
+                create_runtime_type(name="runtime-2"),
+                create_runtime_type(name="runtime-3"),
+            ],
         ),
-        # cluster retrieval fails but namespace succeeds -> expect TimeoutError
+        # cluster retrieval fails but namespace succeeds -> expect SUCCESS (partial results)
         TestCase(
             name="cluster fails but namespace succeeds",
-            expected_status=FAILED,
+            expected_status=SUCCESS,
             config={
                 "namespace": DEFAULT_NAMESPACE,
                 "name": LIST_RUNTIMES,
                 "cluster_error": TIMEOUT,
             },
-            expected_error=TimeoutError,
+            expected_output=[
+                create_runtime_type(name="runtime-1"),
+                create_runtime_type(name="ns-runtime-2"),
+            ],
         ),
         # both fail with timeout -> expect TimeoutError
         TestCase(
