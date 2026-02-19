@@ -27,8 +27,8 @@ import string
 from unittest.mock import Mock, patch
 import uuid
 
-from kubernetes import client
 from kubeflow_trainer_api import models
+from kubernetes import client
 import pytest
 
 from kubeflow.common.types import KubernetesBackendConfig
@@ -902,39 +902,45 @@ def test_get_runtime(kubernetes_backend, test_case):
                 create_runtime_type(name="runtime-3"),
             ],
         ),
-        # namespace retrieval fails (timeout) but cluster succeeds -> expect SUCCESS (partial results)
+        # namespace retrieval fails (timeout) -> expect TimeoutError (raised immediately)
         TestCase(
             name="namespace fails but cluster succeeds",
-            expected_status=SUCCESS,
+            expected_status=FAILED,
             config={"namespace": TIMEOUT, "name": LIST_RUNTIMES},
+            expected_error=TimeoutError,
+        ),
+        TestCase(
+            name="namespace 404 but cluster succeeds",
+            expected_status=SUCCESS,
+            config={
+                "namespace_error": client.ApiException(status=404),
+                "name": LIST_RUNTIMES,
+            },
             expected_output=[
                 create_runtime_type(name="runtime-1"),
                 create_runtime_type(name="runtime-2"),
                 create_runtime_type(name="runtime-3"),
             ],
         ),
-        # cluster retrieval fails but namespace succeeds -> expect SUCCESS (partial results)
+        # cluster retrieval fails (timeout) -> expect TimeoutError (raised immediately)
         TestCase(
             name="cluster fails but namespace succeeds",
-            expected_status=SUCCESS,
+            expected_status=FAILED,
             config={
                 "namespace": DEFAULT_NAMESPACE,
                 "name": LIST_RUNTIMES,
                 "cluster_error": TIMEOUT,
             },
-            expected_output=[
-                create_runtime_type(name="runtime-1"),
-                create_runtime_type(name="ns-runtime-2"),
-            ],
+            expected_error=TimeoutError,
         ),
-        # both fail with timeout -> expect TimeoutError
+        # both fail with timeout -> expect TimeoutError (namespace raises first)
         TestCase(
             name="both fail with timeout",
             expected_status=FAILED,
             config={"namespace_error": TIMEOUT, "name": LIST_RUNTIMES, "cluster_error": TIMEOUT},
             expected_error=TimeoutError,
         ),
-        # both fail with other errors -> expect RuntimeError
+        # both fail with other errors -> expect RuntimeError (namespace raises first)
         TestCase(
             name="both fail with runtime error",
             expected_status=FAILED,
@@ -955,7 +961,7 @@ def test_list_runtimes(kubernetes_backend, test_case):
     # If tests passed a sentinel (TIMEOUT or RUNTIME) in `namespace`, don't set the backend
     # namespace to that sentinel (that causes the fixture helper to raise at call time).
     # Instead, keep a real namespace and inject a thread whose .get() raises as desired.
-    if ns_cfg in {TIMEOUT, RUNTIME}:
+    if ns_cfg in {TIMEOUT, RUNTIME} or isinstance(ns_cfg, Exception):
         # keep a safe namespace for API call signatures
         kubernetes_backend.namespace = DEFAULT_NAMESPACE
         # inject mock thread that will raise on .get()

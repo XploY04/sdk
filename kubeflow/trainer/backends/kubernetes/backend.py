@@ -108,38 +108,30 @@ class KubernetesBackend(RuntimeBackend):
             async_req=True,
         )
 
-        # Helper to fetch and convert runtime list
-        def fetch_runtime_list(thread, kind, model_class):
-            try:
-                return model_class.from_dict(thread.get(common_constants.DEFAULT_TIMEOUT)), None
-            except multiprocessing.TimeoutError as e:
-                return None, TimeoutError(f"Timeout to list {kind}s")
-            except Exception as e:
-                return None, RuntimeError(f"Failed to list {kind}s")
-
-        cluster_runtimes, cluster_error = fetch_runtime_list(
-            cluster_thread,
-            constants.CLUSTER_TRAINING_RUNTIME_KIND,
-            models.TrainerV1alpha1ClusterTrainingRuntimeList,
-        )
-        namespace_runtimes, namespace_error = fetch_runtime_list(
-            namespace_thread,
-            constants.TRAINING_RUNTIME_KIND,
-            models.TrainerV1alpha1TrainingRuntimeList,
-        )
-
-        if namespace_error and cluster_error:
-            if isinstance(namespace_error, TimeoutError) and isinstance(cluster_error, TimeoutError):
-                raise namespace_error
-            raise RuntimeError(
-                f"Failed to list runtimes. Namespace error: {namespace_error}. "
-                f"Cluster error: {cluster_error}"
+        # Fetch namespace-scoped TrainingRuntimes.
+        namespace_runtimes = None
+        try:
+            namespace_runtimes = models.TrainerV1alpha1TrainingRuntimeList.from_dict(
+                namespace_thread.get(common_constants.DEFAULT_TIMEOUT)
             )
+        except multiprocessing.TimeoutError as e:
+            raise TimeoutError(f"Timeout to list {constants.TRAINING_RUNTIME_KIND}s") from e
+        except client.ApiException as e:
+            if e.status != 404:
+                raise RuntimeError(f"Failed to list {constants.TRAINING_RUNTIME_KIND}s") from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to list {constants.TRAINING_RUNTIME_KIND}s") from e
 
-        if namespace_error:
-            logger.warning(f"Failed to list namespaced runtimes, skipping: {namespace_error}")
-        if cluster_error:
-            logger.warning(f"Failed to list cluster runtimes, skipping: {cluster_error}")
+        # Fetch cluster-scoped ClusterTrainingRuntimes.
+        cluster_runtimes = None
+        try:
+            cluster_runtimes = models.TrainerV1alpha1ClusterTrainingRuntimeList.from_dict(
+                cluster_thread.get(common_constants.DEFAULT_TIMEOUT)
+            )
+        except multiprocessing.TimeoutError as e:
+            raise TimeoutError(f"Timeout to list {constants.CLUSTER_TRAINING_RUNTIME_KIND}s") from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to list {constants.CLUSTER_TRAINING_RUNTIME_KIND}s") from e
 
         # Collect runtimes in a map, preferring namespaced over cluster-scoped
         runtimes_by_name = {}
@@ -202,11 +194,11 @@ class KubernetesBackend(RuntimeBackend):
         except client.ApiException as e:
             if e.status != 404:
                 raise RuntimeError(
-                    f"Failed to get namespaced {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
+                    f"Failed to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
                 ) from e
         except Exception as e:
             raise RuntimeError(
-                f"Failed to get namespaced {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
+                f"Failed to get {constants.TRAINING_RUNTIME_KIND}: {self.namespace}/{name}"
             ) from e
 
         try:
